@@ -16,6 +16,7 @@ package build
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"crypto/sha256"
 	"debug/elf"
@@ -27,6 +28,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -36,6 +38,9 @@ import (
 	"chainguard.dev/apko/pkg/tarball"
 	"chainguard.dev/melange/internal/sign"
 	"github.com/psanford/memfs"
+	"gocloud.dev/blob"
+	_ "gocloud.dev/blob/gcsblob"
+	_ "gocloud.dev/blob/s3blob"
 )
 
 type PackageContext struct {
@@ -582,22 +587,44 @@ func (pc *PackageContext) EmitPackage() error {
 		combinedParts = append([]io.Reader{signatureTarGz}, combinedParts...)
 	}
 
-	// build the final tarball
-	if err := os.MkdirAll(pc.OutDir, 0755); err != nil {
-		return fmt.Errorf("unable to create output directory: %w", err)
-	}
+	if strings.Contains(pc.OutDir, "://") {
+		ctx := context.Background()
+		driver := pc.OutDir[:strings.Index(pc.OutDir, "://")]
+		bucket, prefix, _ := strings.Cut(pc.OutDir[strings.Index(pc.OutDir, "://")+3:], "/")
+		b, err := blob.OpenBucket(ctx, fmt.Sprintf("%s://%s", driver, bucket))
+		if err != nil {
+			return err
+		}
+		b = blob.PrefixedBucket(b, prefix)
+		defer b.Close()
+		w, err := b.NewWriter(ctx, pc.Identity(), nil)
+		if err != nil {
+			return err
+		}
+		defer w.Close()
+		if err := combine(w, combinedParts...); err != nil {
+			return fmt.Errorf("unable to write apk file: %w", err)
+		}
+		pc.Logger.Printf("wrote %s", path.Join(pc.OutDir, pc.Identity()))
 
-	outFile, err := os.Create(pc.Filename())
-	if err != nil {
-		return fmt.Errorf("unable to create apk file: %w", err)
-	}
-	defer outFile.Close()
+	} else {
+		// build the final tarball
+		if err := os.MkdirAll(pc.OutDir, 0755); err != nil {
+			return fmt.Errorf("unable to create output directory: %w", err)
+		}
 
-	if err := combine(outFile, combinedParts...); err != nil {
-		return fmt.Errorf("unable to write apk file: %w", err)
-	}
+		outFile, err := os.Create(pc.Filename())
+		if err != nil {
+			return fmt.Errorf("unable to create apk file: %w", err)
+		}
+		defer outFile.Close()
 
-	pc.Logger.Printf("wrote %s", outFile.Name())
+		if err := combine(outFile, combinedParts...); err != nil {
+			return fmt.Errorf("unable to write apk file: %w", err)
+		}
+
+		pc.Logger.Printf("wrote %s", outFile.Name())
+	}
 
 	return nil
 }
