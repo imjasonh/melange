@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"chainguard.dev/apko/pkg/log"
+	"github.com/chainguard-dev/kontext"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	ggcrv1 "github.com/google/go-containerregistry/pkg/v1"
@@ -87,21 +88,47 @@ func (k *kubernetes) StartPod(cfg *Config) error {
 		return fmt.Errorf("pod already running: %s", cfg.PodID)
 	}
 
-	// TODO: push cfg.ImgRef to a registry so the cluster can get it (or load it in the cluster)
-	// TODO: get cfg.Mounts available to the cluster, using kontext and initContainers?
-
-	p, err := k.pods.Create(context.Background(), &corev1.Pod{
+	ctx := context.Background()
+	p := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "melange-",
 		},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{{
 				Name:    "melange",
-				Image:   cfg.ImgRef,
+				Image:   cfg.ImgRef,                    // ImgRef is pushed to the registry by the Loader.
 				Command: []string{"sleep", "infinity"}, // Sleep indefinitely waiting for commands or termination.
 			}},
 		},
-	}, metav1.CreateOptions{})
+	}
+
+	// Bundle mounts into self-extracting initContainers.
+	for i, m := range cfg.Mounts {
+		dig, err := kontext.Bundle(ctx, m.Source, k.repo.Tag("melange-mount"))
+		if err != nil {
+			return fmt.Errorf("failed to bundle %s: %w", m.Source, err)
+		}
+		p.Spec.InitContainers = append(p.Spec.InitContainers, corev1.Container{
+			Name:  fmt.Sprintf("mount-%d", i),
+			Image: dig.String(),
+			VolumeMounts: []corev1.VolumeMount{{
+				Name:      fmt.Sprintf("mount-%d", i),
+				MountPath: m.Destination,
+			}},
+		})
+		p.Spec.Volumes = append(p.Spec.Volumes, corev1.Volume{
+			Name: fmt.Sprintf("mount-%d", i),
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		})
+		p.Spec.Containers[0].VolumeMounts = append(p.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+			Name:      fmt.Sprintf("mount-%d", i),
+			MountPath: m.Destination,
+		})
+	}
+
+	p, err := k.pods.Create(ctx, p, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to create pod: %w", err)
 	}
@@ -201,8 +228,9 @@ func (k kubernetesLoader) LoadImage(layerTarGZ string, arch apko_types.Architect
 		return "", err
 	}
 	img, err = mutate.ConfigFile(img, &ggcrv1.ConfigFile{
+		OS:           arch.ToOCIPlatform().OS,
 		Architecture: arch.ToOCIPlatform().Architecture,
-		OS:           "linux",
+		Variant:      arch.ToOCIPlatform().Variant,
 	})
 	if err != nil {
 		return "", err
