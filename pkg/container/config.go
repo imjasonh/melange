@@ -29,11 +29,13 @@ type Capabilities struct {
 }
 
 type Config struct {
-	Mounts       []BindMount
-	Capabilities Capabilities
-	Logger       log.Logger
-	Environment  map[string]string
-	ImgRef       string
-	PodID        string
-	Arch         apko_types.Architecture
+	PackageName            string
+	Mounts                 []BindMount
+	Capabilities           Capabilities
+	Logger                 log.Logger
+	Environment            map[string]string
+	ImgRef                 string
+	PodID                  string
+	Arch                   apko_types.Architecture
+	CPURequest, RAMRequest string
 }

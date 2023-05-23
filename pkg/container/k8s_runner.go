@@ -32,6 +32,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8s "k8s.io/client-go/kubernetes"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -82,6 +83,9 @@ func (k *kubernetes) Name() string {
 	return KubernetesName
 }
 
+var defaultCPU = resource.MustParse("10")
+var defaultRAM = resource.MustParse("1Gi")
+
 // StartPod starts a Kubernetes pod, if necessary.
 func (k *kubernetes) StartPod(cfg *Config) error {
 	if cfg.PodID != "" {
@@ -91,15 +95,40 @@ func (k *kubernetes) StartPod(cfg *Config) error {
 	ctx := context.Background()
 	p := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "melange-",
+			GenerateName: fmt.Sprintf("melange-%s-", cfg.PackageName),
+			Labels: map[string]string{
+				"app.kubernetes.io/component": cfg.PackageName,
+			},
 		},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{{
 				Name:    "melange",
 				Image:   cfg.ImgRef,                    // ImgRef is pushed to the registry by the Loader.
 				Command: []string{"sleep", "infinity"}, // Sleep indefinitely waiting for commands or termination.
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    defaultCPU,
+						corev1.ResourceMemory: defaultRAM,
+					},
+				},
 			}},
 		},
+	}
+
+	// Set resource requests, if any.
+	if cfg.CPURequest != "" {
+		p.Spec.Containers[0].Resources.Requests[corev1.ResourceCPU] = resource.MustParse(cfg.CPURequest)
+	}
+	if cfg.RAMRequest != "" {
+		p.Spec.Containers[0].Resources.Requests[corev1.ResourceMemory] = resource.MustParse(cfg.RAMRequest)
+	}
+
+	// Assign arm64 builds to arm64 nodes.
+	if cfg.Arch.ToAPK() == "aarch64" {
+		p.Spec.NodeSelector = map[string]string{
+			// "cloud.google.com/compute-class": "Scale-Out", TODO(jason): Needed for GKE Autopilot.
+			"kubernetes.io/arch": "arm64",
+		}
 	}
 
 	// Bundle mounts into self-extracting initContainers.

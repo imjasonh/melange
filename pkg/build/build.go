@@ -294,6 +294,11 @@ type Configuration struct {
 	VarTransforms []VarTransforms `yaml:"var-transforms,omitempty"`
 	// Optional: Deviations to the build
 	Options map[string]BuildOption `yaml:"options,omitempty"`
+
+	// When using the K8s runner, this holds the CPU and RAM resources to request.
+	Resources struct {
+		CPU, RAM string
+	} `yaml:"resources,omitempty"`
 }
 
 // Name returns a name for the configuration, using the package name.
@@ -1840,12 +1845,15 @@ func (ctx *Context) buildWorkspaceConfig() *container.Config {
 	}
 
 	cfg := container.Config{
+		PackageName:  ctx.Configuration.Package.Name,
 		Mounts:       mounts,
 		Capabilities: caps,
 		Logger:       ctx.Logger,
 		Environment: map[string]string{
 			"SOURCE_DATE_EPOCH": fmt.Sprintf("%d", ctx.SourceDateEpoch.Unix()),
 		},
+		CPURequest: ctx.Configuration.Resources.CPU,
+		RAMRequest: ctx.Configuration.Resources.RAM,
 	}
 
 	for k, v := range ctx.Configuration.Environment.Environment {
