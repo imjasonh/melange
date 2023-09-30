@@ -97,7 +97,7 @@ func substitutionMap(pb *PipelineBuild) (map[string]string, error) {
 	nw := map[string]string{
 		config.SubstitutionPackageName:          pb.Package.Package.Name,
 		config.SubstitutionPackageVersion:       pb.Package.Package.Version,
-		config.SubstitutionPackageEpoch:         strconv.FormatUint(pb.Package.Package.Epoch, 10),
+		config.SubstitutionPackageEpoch:         strconv.FormatUint(uint64(pb.Package.Package.Epoch), 10),
 		config.SubstitutionPackageFullVersion:   fmt.Sprintf("%s-r%s", config.SubstitutionPackageVersion, config.SubstitutionPackageEpoch),
 		config.SubstitutionTargetsDestdir:       fmt.Sprintf("/home/build/melange-out/%s", pb.Package.Package.Name),
 		config.SubstitutionTargetsContextdir:    fmt.Sprintf("/home/build/melange-out/%s", pb.Package.Package.Name),

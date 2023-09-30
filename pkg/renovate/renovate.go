@@ -104,7 +104,7 @@ func (rc *RenovationContext) LoadConfig() error {
 	// TODO(Elizafox): Enable cross-arch bumping
 	vars[config.SubstitutionPackageName] = cfg.Package.Name
 	vars[config.SubstitutionPackageVersion] = cfg.Package.Version
-	vars[config.SubstitutionPackageEpoch] = strconv.FormatUint(cfg.Package.Epoch, 10)
+	vars[config.SubstitutionPackageEpoch] = strconv.FormatUint(uint64(cfg.Package.Epoch), 10)
 	vars[config.SubstitutionBuildArch] = apko_types.ParseArchitecture(runtime.GOARCH).ToAPK()
 
 	err = cfg.PerformVarSubstitutions(vars)
