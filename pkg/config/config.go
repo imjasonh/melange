@@ -91,7 +91,7 @@ type Package struct {
 	// The version of the package
 	Version string `yaml:"version"`
 	// The monotone increasing epoch of the package
-	Epoch uint64 `yaml:"epoch"`
+	Epoch uint32 `yaml:"epoch"`
 	// A human readable description of the package
 	Description string `yaml:"description,omitempty"`
 	// The URL to the package's homepage
