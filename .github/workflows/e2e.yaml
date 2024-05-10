@@ -21,11 +21,11 @@ jobs:
       fail-fast: false
       matrix:
         example:
-        - git-checkout.yaml
-        - gnu-hello.yaml
-        - mbedtls.yaml
-        - minimal.yaml
-        - sshfs.yaml
+        - git-checkout
+        - gnu-hello
+        - mbedtls
+        - minimal
+        - sshfs
 
     steps:
     - uses: step-security/harden-runner@a4aa98b93cab29d9b1101a6143fb8bce00e2eac4 # v2.7.1
@@ -43,7 +43,11 @@ jobs:
 
         make melange
         ./melange keygen
-        ./melange build --pipeline-dir=pipelines examples/${{matrix.example}} --arch=x86_64 --empty-workspace
+        ./melange build --pipeline-dir=pipelines examples/${{matrix.example}}.yaml --arch=x86_64 --empty-workspace
+
+    - name: Check Melange config exists
+      run: |
+        tar -Oxf packages/x86_64/${{matrix.example}}-*.apk var/lib/${{matrix.example}}.yaml
 
     - name: Check SBOM Conformance
       run: |

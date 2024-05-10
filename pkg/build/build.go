@@ -861,6 +861,11 @@ func (b *Build) BuildPackage(ctx context.Context) error {
 		return fmt.Errorf("writing SBOMs: %w", err)
 	}
 
+	// emit resolved build config
+	if err := b.emitConfig(ctx); err != nil {
+		return fmt.Errorf("unable to emit resolved build config: %w", err)
+	}
+
 	// emit main package
 	if err := pb.Emit(ctx, pkg); err != nil {
 		return fmt.Errorf("unable to emit package: %w", err)

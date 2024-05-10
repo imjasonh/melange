@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,6 +31,7 @@ import (
 	"text/template"
 
 	apko_types "chainguard.dev/apko/pkg/build/types"
+	"gopkg.in/yaml.v3"
 	"sigs.k8s.io/release-utils/version"
 
 	"github.com/klauspost/compress/gzip"
@@ -115,6 +117,23 @@ func (pb *PipelineBuild) Emit(ctx context.Context, pkg *config.Package) error {
 	}
 
 	return pc.EmitPackage(ctx)
+}
+
+func (b *Build) emitConfig(ctx context.Context) error {
+	path := filepath.Join(b.WorkspaceDir, "melange-out", b.Configuration.Package.Name, "var/lib")
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return fmt.Errorf("unable to create config directory: %w", err)
+	}
+
+	f, err := os.Create(filepath.Join(path, fmt.Sprintf("%s.yaml", b.Configuration.Package.Name)))
+	if err != nil {
+		return fmt.Errorf("unable to create config file: %w", err)
+	}
+	defer f.Close()
+
+	log.Println("============== writing the thing") // TODO remove
+
+	return yaml.NewEncoder(f).Encode(b.Configuration)
 }
 
 // AppendBuildLog will create or append a list of packages that were built by melange build
