@@ -16,3 +16,10 @@ pipeline:
   - runs: |
       mkdir -p "${{targets.destdir}}"
       echo "hello" > "${{targets.destdir}}/hello"
+
+      echo "this is my license" > LICENSE.txt
+
+      mkdir -p ./lots/of/nested/dirs
+      echo "this is also my license" > ./lots/of/nested/dirs/LICENSE.txt
+
+  - uses: include-licenses

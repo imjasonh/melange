@@ -1,0 +1,19 @@
+name: Concatenate license file contents into a file in the destination package
+
+needs:
+  packages:
+    - wget
+
+inputs:
+  path:
+    description: Path to place concatenated licenses.
+    default: ${{targets.contextdir}}/var/lib/licenses/${{package.name}}
+
+pipeline:
+  - runs: |
+      mkdir -p "${{inputs.path}}"
+      for f in $(find . -type f -iname "LICENSE*"); do
+        echo "Found license file at: $f"
+        cat $f >> ${{inputs.path}}/LICENSES
+        echo "-----" >> ${{inputs.path}}/LICENSES
+      done
