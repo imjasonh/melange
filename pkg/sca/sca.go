@@ -217,43 +217,24 @@ func getLdSoConfDLibPaths(ctx context.Context, hdl SCAHandle) ([]string, error) 
 	return extraLibPaths, nil
 }
 
-func generateCmdProviders(ctx context.Context, hdl SCAHandle, generated *config.Dependencies, extraLibDirs []string) error {
+func generateCmdFileDeps(ctx context.Context, hdl SCAHandle, path string, d fs.DirEntry, generated *config.Dependencies) error {
 	log := clog.FromContext(ctx)
 
-	log.Info("scanning for commands...")
-	fsys, err := hdl.Filesystem()
+	fi, err := d.Info()
 	if err != nil {
 		return err
 	}
-
-	if err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		fi, err := d.Info()
-		if err != nil {
-			return err
-		}
-
-		mode := fi.Mode()
+	mode := fi.Mode()
 		if !mode.IsRegular() {
 			return nil
 		}
-
-		if mode.Perm()&0o555 == 0o555 {
-			if isInDir(path, []string{"bin/", "sbin/", "usr/bin/", "usr/sbin/"}) {
-				basename := filepath.Base(path)
-				log.Infof("  found command %s", path)
-				generated.Provides = append(generated.Provides, fmt.Sprintf("cmd:%s=%s", basename, hdl.Version()))
-			}
+	if mode.Perm()&0o555 == 0o555 {
+		if isInDir(path, []string{"bin/", "sbin/", "usr/bin/", "usr/sbin/"}) {
+			basename := filepath.Base(path)
+			log.Infof("  found command %s", basename)
+			generated.Provides = append(generated.Provides, fmt.Sprintf("cmd:%s=%s", basename, hdl.Version()))
 		}
-
-		return nil
-	}); err != nil {
-		return err
 	}
-
 	return nil
 }
 
@@ -723,91 +704,78 @@ func generateSharedObjectNameDeps(ctx context.Context, hdl SCAHandle, generated 
 // wolfi, however package install tests will catch that in presubmit
 var generateRuntimePkgConfigDeps = true
 
-// generatePkgConfigDeps generates a list of provided pkg-config package names and versions,
-// as well as dependency relationships.
-func generatePkgConfigDeps(ctx context.Context, hdl SCAHandle, generated *config.Dependencies, extraLibDirs []string) error {
+func generatePkgConfigFileDeps(ctx context.Context, hdl SCAHandle, path string, d fs.DirEntry, generated *config.Dependencies) error {
 	log := clog.FromContext(ctx)
-	log.Infof("scanning for pkg-config data...")
+
+	if !strings.HasSuffix(path, ".pc") {
+		return nil
+	}
+
+	fi, err := d.Info()
+	if err != nil {
+		return err
+	}
+
+	mode := fi.Mode()
+
+	// Sigh.  ncurses uses symlinks to alias .pc files to other .pc files.
+	// Skip the symlinks for now.
+	if mode.Type()&fs.ModeSymlink == fs.ModeSymlink {
+		return nil
+	}
 
 	fsys, err := hdl.Filesystem()
 	if err != nil {
 		return err
 	}
 
-	if err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if !strings.HasSuffix(path, ".pc") {
-			return nil
-		}
-
-		fi, err := d.Info()
-		if err != nil {
-			return err
-		}
-
-		mode := fi.Mode()
-
-		// Sigh.  ncurses uses symlinks to alias .pc files to other .pc files.
-		// Skip the symlinks for now.
-		if mode.Type()&fs.ModeSymlink == fs.ModeSymlink {
-			return nil
-		}
-
-		// TODO(kaniini): Sigh.  apkofs should have ReadFile by default.
-		dataFile, err := fsys.Open(path)
-		if err != nil {
-			return nil
-		}
-		defer dataFile.Close()
-
-		data, err := io.ReadAll(dataFile)
-		if err != nil {
-			return nil
-		}
-
-		// TODO(kaniini): Sigh.  go-pkgconfig should support reading from any io.Reader.
-		pkg, err := pkgconfig.Parse(string(data))
-		if err != nil {
-			log.Warnf("Unable to load .pc file (%s) using pkgconfig: %v", path, err)
-			return nil
-		}
-
-		pcName := filepath.Base(path)
-		pcName, _ = strings.CutSuffix(pcName, ".pc")
-
-		if isInDir(path, []string{"usr/local/lib/pkgconfig/", "usr/local/share/pkgconfig/", "usr/lib/pkgconfig/", "usr/lib64/pkgconfig/", "usr/share/pkgconfig/"}) {
-			log.Infof("  found pkg-config %s for %s", pcName, path)
-			generated.Provides = append(generated.Provides, fmt.Sprintf("pc:%s=%s", pcName, hdl.Version()))
-
-			if generateRuntimePkgConfigDeps {
-				// TODO(kaniini): Capture version relationships here too.  In practice, this does not matter
-				// so much though for us.
-				for _, dep := range pkg.Requires {
-					log.Infof("  found pkg-config dependency (requires) %s for %s", dep.Identifier, path)
-					generated.Runtime = append(generated.Runtime, fmt.Sprintf("pc:%s", dep.Identifier))
-				}
-
-				for _, dep := range pkg.RequiresPrivate {
-					log.Infof("  found pkg-config dependency (requires private) %s for %s", dep.Identifier, path)
-					generated.Runtime = append(generated.Runtime, fmt.Sprintf("pc:%s", dep.Identifier))
-				}
-
-				for _, dep := range pkg.RequiresInternal {
-					log.Infof("  found pkg-config dependency (requires internal) %s for %s", dep.Identifier, path)
-					generated.Runtime = append(generated.Runtime, fmt.Sprintf("pc:%s", dep.Identifier))
-				}
-			}
-		} else {
-			log.Infof("  found vendored pkg-config %s for %s", pcName, path)
-			generated.Vendored = append(generated.Vendored, fmt.Sprintf("pc:%s=%s", pcName, hdl.Version()))
-		}
-
+	// TODO(kaniini): Sigh.  apkofs should have ReadFile by default.
+	dataFile, err := fsys.Open(path)
+	if err != nil {
 		return nil
-	}); err != nil {
-		return err
+	}
+	defer dataFile.Close()
+
+	data, err := io.ReadAll(dataFile)
+	if err != nil {
+		return nil
+	}
+
+	// TODO(kaniini): Sigh.  go-pkgconfig should support reading from any io.Reader.
+	pkg, err := pkgconfig.Parse(string(data))
+	if err != nil {
+		log.Warnf("Unable to load .pc file (%s) using pkgconfig: %v", path, err)
+		return nil
+	}
+
+	pcName := filepath.Base(path)
+	pcName, _ = strings.CutSuffix(pcName, ".pc")
+
+	if isInDir(path, []string{"usr/local/lib/pkgconfig/", "usr/local/share/pkgconfig/", "usr/lib/pkgconfig/", "usr/lib64/pkgconfig/", "usr/share/pkgconfig/"}) {
+		log.Infof("  found pkg-config %s for %s", pcName, path)
+		generated.Provides = append(generated.Provides, fmt.Sprintf("pc:%s=%s", pcName, hdl.Version()))
+
+		if generateRuntimePkgConfigDeps {
+			// TODO(kaniini): Capture version relationships here too.  In practice, this does not matter
+			// so much though for us.
+			for _, dep := range pkg.Requires {
+				log.Infof("  found pkg-config dependency (requires) %s for %s", dep.Identifier, path)
+				generated.Runtime = append(generated.Runtime, fmt.Sprintf("pc:%s", dep.Identifier))
+			}
+
+			for _, dep := range pkg.RequiresPrivate {
+				log.Infof("  found pkg-config dependency (requires private) %s for %s", dep.Identifier, path)
+				generated.Runtime = append(generated.Runtime, fmt.Sprintf("pc:%s", dep.Identifier))
+			}
+
+			for _, dep := range pkg.RequiresInternal {
+				log.Infof("  found pkg-config dependency (requires internal) %s for %s", dep.Identifier, path)
+				generated.Runtime = append(generated.Runtime, fmt.Sprintf("pc:%s", dep.Identifier))
+			}
+		}
+	} else {
+		log.Infof("  found vendored pkg-config %s for %s", pcName, path)
+		generated.Vendored = append(generated.Vendored, fmt.Sprintf("pc:%s=%s", pcName, hdl.Version()))
 	}
 
 	return nil
@@ -925,52 +893,37 @@ func generateRubyDeps(ctx context.Context, hdl SCAHandle, generated *config.Depe
 	return nil
 }
 
-// For a documentation package add a dependency on man-db and / or texinfo as appropriate
-func generateDocDeps(ctx context.Context, hdl SCAHandle, generated *config.Dependencies, extraLibDirs []string) error {
+func generateDocFileDeps(ctx context.Context, hdl SCAHandle, path string, _ fs.DirEntry, generated *config.Dependencies) error {
 	log := clog.FromContext(ctx)
-	log.Infof("scanning for -doc package...")
+
 	if !strings.HasSuffix(hdl.PackageName(), "-doc") {
 		return nil
 	}
 
-	fsys, err := hdl.Filesystem()
-	if err != nil {
-		return err
+	if strings.HasPrefix(path, "usr/share/man/") {
+
+		// Do not add a man-db dependency if one already exists.
+		for _, dep := range hdl.BaseDependencies().Runtime {
+			if dep == "man-db" {
+				log.Warnf("%s: man-db dependency already specified, consider removing it in favor of SCA-generated dependency", hdl.PackageName())
+			}
+		}
+
+		log.Infof("  found files in /usr/share/man/ in package, generating man-db dependency")
+		generated.Runtime = append(generated.Runtime, "man-db")
 	}
 
-	if err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+	if strings.HasPrefix(path, "usr/share/info/") {
 
-		if isInDir(path, []string{"usr/share/man"}) {
-
-			// Do not add a man-db dependency if one already exists.
-			for _, dep := range hdl.BaseDependencies().Runtime {
-				if dep == "man-db" {
-					log.Warnf("%s: man-db dependency already specified, consider removing it in favor of SCA-generated dependency", hdl.PackageName())
-				}
+		// Do not add a texinfo dependency if one already exists.
+		for _, dep := range hdl.BaseDependencies().Runtime {
+			if dep == "texinfo" {
+				log.Warnf("%s: texinfo dependency already specified, consider removing it in favor of SCA-generated dependency", hdl.PackageName())
 			}
-
-			log.Infof("  found files in /usr/share/man/ in package, generating man-db dependency")
-			generated.Runtime = append(generated.Runtime, "man-db")
 		}
 
-		if isInDir(path, []string{"usr/share/info"}) {
-
-			// Do not add a texinfo dependency if one already exists.
-			for _, dep := range hdl.BaseDependencies().Runtime {
-				if dep == "texinfo" {
-					log.Warnf("%s: texinfo dependency already specified, consider removing it in favor of SCA-generated dependency", hdl.PackageName())
-				}
-			}
-
-			log.Infof("  found files in /usr/share/info/ in package, generating texinfo dependency")
-			generated.Runtime = append(generated.Runtime, "texinfo")
-		}
-		return nil
-	}); err != nil {
-		return err
+		log.Infof("  found files in /usr/share/info/ in package, generating texinfo dependency")
+		generated.Runtime = append(generated.Runtime, "texinfo")
 	}
 
 	return nil
@@ -1049,56 +1002,40 @@ func getShbang(fp io.Reader) (string, error) {
 	return bin, nil
 }
 
-func generateShbangDeps(ctx context.Context, hdl SCAHandle, generated *config.Dependencies, extraLibDirs []string) error {
+func generateShbangFileDeps(ctx context.Context, hdl SCAHandle, path string, d fs.DirEntry, generated *config.Dependencies) error {
 	log := clog.FromContext(ctx)
-	log.Infof("scanning for shbang deps...")
+
+	if d.Type()&fs.ModeSymlink == fs.ModeSymlink {
+		return nil
+	}
+
+	if !strings.HasPrefix(path, "usr/bin/") &&
+		!strings.HasPrefix(path, "usr/local/bin/") &&
+		!strings.HasPrefix(path, "usr/local/sbin/") {
+		return nil
+	}
+
+	if d.Type().IsDir() {
+		return nil
+	}
 
 	fsys, err := hdl.Filesystem()
 	if err != nil {
 		return err
 	}
 
-	cmds := map[string]string{}
-	if err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
+	if fp, err := fsys.Open(path); err == nil {
+		shbang, err := getShbang(fp)
 		if err != nil {
-			return err
-		}
+			log.Warnf("Error reading shbang from %s: %v", path, err)
+		} else if shbang != "" {
+			generated.Runtime = append(generated.Runtime, "cmd:"+filepath.Base(shbang))
 
-		if d.Type()&fs.ModeSymlink == fs.ModeSymlink {
-			return nil
 		}
-
-		if !strings.HasPrefix(path, "usr/bin/") &&
-			!strings.HasPrefix(path, "usr/local/bin/") &&
-			!strings.HasPrefix(path, "usr/local/sbin/") {
-			return nil
-		}
-
-		if d.Type().IsDir() {
-			return nil
-		}
-
-		if fp, err := fsys.Open(path); err == nil {
-			shbang, err := getShbang(fp)
-			if err != nil {
-				log.Warnf("Error reading shbang from %s: %v", path, err)
-			} else if shbang != "" {
-				cmds[filepath.Base(shbang)] = path
-			}
-			fp.Close()
-		} else {
-			log.Infof("Failed to open %s: %v", path, err)
-		}
-		return nil
-	}); err != nil {
-		return err
+		fp.Close()
+	} else {
+		log.Infof("Failed to open %s: %v", path, err)
 	}
-
-	for base, path := range cmds {
-		log.Infof("Added shbang dep cmd:%s for %s", base, path)
-		generated.Runtime = append(generated.Runtime, "cmd:"+base)
-	}
-
 	return nil
 }
 
@@ -1112,12 +1049,10 @@ func Analyze(ctx context.Context, hdl SCAHandle, generated *config.Dependencies)
 
 	generators := []DependencyGenerator{
 		generateSharedObjectNameDeps,
-		generateCmdProviders,
-		generateDocDeps,
-		generatePkgConfigDeps,
 		generatePythonDeps,
 		generateRubyDeps,
-		generateShbangDeps,
+
+		generateFileDeps,
 	}
 
 	for _, gen := range generators {
@@ -1150,3 +1085,40 @@ func Analyze(ctx context.Context, hdl SCAHandle, generated *config.Dependencies)
 
 	return nil
 }
+
+func generateFileDeps(ctx context.Context, hdl SCAHandle, generated *config.Dependencies, _ []string) error {
+	fsys, err := hdl.Filesystem()
+	if err != nil {
+		return err
+	}
+
+	return fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		mode := fi.Mode()
+		if !mode.IsRegular() {
+			return nil
+		}
+
+		for _, fgen := range []fileDepsGenerator{
+			generateCmdFileDeps,
+			generateDocFileDeps,
+			generatePkgConfigFileDeps,
+			generateShbangFileDeps,
+		} {
+			if err := fgen(ctx, hdl, path, d, generated); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+type fileDepsGenerator func(ctx context.Context, hdl SCAHandle, path string, d fs.DirEntry, generated *config.Dependencies) error
